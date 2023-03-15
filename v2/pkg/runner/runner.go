@@ -10,7 +10,9 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
+
 	"github.com/projectdiscovery/gologger"
+
 	"github.com/projectdiscovery/subfinder/v2/pkg/passive"
 	"github.com/projectdiscovery/subfinder/v2/pkg/resolve"
 )
@@ -32,8 +34,8 @@ func NewRunner(options *Options) (*Runner, error) {
 	// Initialize the passive subdomain enumeration engine
 	runner.initializePassiveEngine()
 
-	// Initialize the active subdomain enumeration engine
-	err := runner.initializeActiveEngine()
+	// Initialize the subdomain resolver
+	err := runner.initializeResolver()
 	if err != nil {
 		return nil, err
 	}
@@ -41,13 +43,18 @@ func NewRunner(options *Options) (*Runner, error) {
 	return runner, nil
 }
 
-// RunEnumeration runs the subdomain enumeration flow on the targets specified
-func (r *Runner) RunEnumeration(ctx context.Context) error {
+// RunEnumeration wraps RunEnumerationWithCtx with an empty context
+func (r *Runner) RunEnumeration() error {
+	return r.RunEnumerationWithCtx(context.Background())
+}
+
+// RunEnumerationWithCtx runs the subdomain enumeration flow on the targets specified
+func (r *Runner) RunEnumerationWithCtx(ctx context.Context) error {
 	outputs := []io.Writer{r.options.Output}
 
 	if len(r.options.Domain) > 0 {
 		domainsReader := strings.NewReader(strings.Join(r.options.Domain, "\n"))
-		return r.EnumerateMultipleDomains(ctx, domainsReader, outputs)
+		return r.EnumerateMultipleDomainsWithCtx(ctx, domainsReader, outputs)
 	}
 
 	// If we have multiple domains as input,
@@ -56,21 +63,26 @@ func (r *Runner) RunEnumeration(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		err = r.EnumerateMultipleDomains(ctx, f, outputs)
+		err = r.EnumerateMultipleDomainsWithCtx(ctx, f, outputs)
 		f.Close()
 		return err
 	}
 
 	// If we have STDIN input, treat it as multiple domains
 	if r.options.Stdin {
-		return r.EnumerateMultipleDomains(ctx, os.Stdin, outputs)
+		return r.EnumerateMultipleDomainsWithCtx(ctx, os.Stdin, outputs)
 	}
 	return nil
 }
 
-// EnumerateMultipleDomains enumerates subdomains for multiple domains
+// EnumerateMultipleDomains wraps EnumerateMultipleDomainsWithCtx with an empty context
+func (r *Runner) EnumerateMultipleDomains(reader io.Reader, writers []io.Writer) error {
+	return r.EnumerateMultipleDomainsWithCtx(context.Background(), reader, writers)
+}
+
+// EnumerateMultipleDomainsWithCtx enumerates subdomains for multiple domains
 // We keep enumerating subdomains for a given domain until we reach an error
-func (r *Runner) EnumerateMultipleDomains(ctx context.Context, reader io.Reader, outputs []io.Writer) error {
+func (r *Runner) EnumerateMultipleDomainsWithCtx(ctx context.Context, reader io.Reader, writers []io.Writer) error {
 	scanner := bufio.NewScanner(reader)
 	ip, _ := regexp.Compile(`^([0-9\.]+$)`)
 	for scanner.Scan() {
@@ -85,14 +97,14 @@ func (r *Runner) EnumerateMultipleDomains(ctx context.Context, reader io.Reader,
 		// of creating a new output file for each domain. Else create a new file
 		// for each domain in the directory.
 		if r.options.OutputFile != "" {
-			outputter := NewOutputter(r.options.JSON)
-			file, err = outputter.createFile(r.options.OutputFile, true)
+			outputWriter := NewOutputWriter(r.options.JSON)
+			file, err = outputWriter.createFile(r.options.OutputFile, true)
 			if err != nil {
 				gologger.Error().Msgf("Could not create file %s for %s: %s\n", r.options.OutputFile, r.options.Domain, err)
 				return err
 			}
 
-			err = r.EnumerateSingleDomain(ctx, domain, append(outputs, file))
+			err = r.EnumerateSingleDomainWithCtx(ctx, domain, append(writers, file))
 
 			file.Close()
 		} else if r.options.OutputDirectory != "" {
@@ -103,18 +115,18 @@ func (r *Runner) EnumerateMultipleDomains(ctx context.Context, reader io.Reader,
 				outputFile += ".txt"
 			}
 
-			outputter := NewOutputter(r.options.JSON)
-			file, err = outputter.createFile(outputFile, false)
+			outputWriter := NewOutputWriter(r.options.JSON)
+			file, err = outputWriter.createFile(outputFile, false)
 			if err != nil {
 				gologger.Error().Msgf("Could not create file %s for %s: %s\n", r.options.OutputFile, r.options.Domain, err)
 				return err
 			}
 
-			err = r.EnumerateSingleDomain(ctx, domain, append(outputs, file))
+			err = r.EnumerateSingleDomainWithCtx(ctx, domain, append(writers, file))
 
 			file.Close()
 		} else {
-			err = r.EnumerateSingleDomain(ctx, domain, outputs)
+			err = r.EnumerateSingleDomainWithCtx(ctx, domain, writers)
 		}
 		if err != nil {
 			return err

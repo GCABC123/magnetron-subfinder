@@ -1,11 +1,17 @@
 # Build
-FROM golang:1.18.4-alpine AS build-env
-RUN go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+
+FROM golang:1.20.1-alpine AS build-env
+RUN apk add build-base
+WORKDIR /app
+COPY . /app
+WORKDIR /app/v2
+RUN go mod download
+RUN go build ./cmd/subfinder
 
 # Release
-FROM alpine:3.16.1
+FROM alpine:3.17.2
 RUN apk -U upgrade --no-cache \
     && apk add --no-cache bind-tools ca-certificates
-COPY --from=build-env /go/bin/subfinder /usr/local/bin/subfinder
+COPY --from=build-env /app/v2/subfinder /usr/local/bin/subfinder
 
 ENTRYPOINT ["subfinder"]

@@ -3,55 +3,60 @@ package passive
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
-	"github.com/projectdiscovery/gologger"
 	"github.com/projectdiscovery/subfinder/v2/pkg/subscraping"
 )
 
-// EnumerateSubdomains enumerates all the subdomains for a given domain
-func (a *Agent) EnumerateSubdomains(domain string, keys *subscraping.Keys, proxy string, rateLimit, timeout int, maxEnumTime time.Duration) chan subscraping.Result {
+// EnumerateSubdomains wraps EnumerateSubdomainsWithCtx with an empty context
+func (a *Agent) EnumerateSubdomains(domain string, proxy string, rateLimit, timeout int, maxEnumTime time.Duration) chan subscraping.Result {
+	return a.EnumerateSubdomainsWithCtx(context.Background(), domain, proxy, rateLimit, timeout, maxEnumTime)
+}
+
+// EnumerateSubdomainsWithCtx enumerates all the subdomains for a given domain
+func (a *Agent) EnumerateSubdomainsWithCtx(ctx context.Context, domain string, proxy string, rateLimit, timeout int, maxEnumTime time.Duration) chan subscraping.Result {
 	results := make(chan subscraping.Result)
 	go func() {
-		session, err := subscraping.NewSession(domain, keys, proxy, rateLimit, timeout)
+		defer close(results)
+
+		session, err := subscraping.NewSession(domain, proxy, rateLimit, timeout)
 		if err != nil {
-			results <- subscraping.Result{Type: subscraping.Error, Error: fmt.Errorf("could not init passive session for %s: %s", domain, err)}
+			results <- subscraping.Result{
+				Type: subscraping.Error, Error: fmt.Errorf("could not init passive session for %s: %s", domain, err),
+			}
+			return
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), maxEnumTime)
-
-		timeTaken := make(map[string]string)
-		timeTakenMutex := &sync.Mutex{}
+		ctx, cancel := context.WithTimeout(ctx, maxEnumTime)
 
 		wg := &sync.WaitGroup{}
 		// Run each source in parallel on the target domain
-		for source, runner := range a.sources {
+		for _, runner := range a.sources {
 			wg.Add(1)
 
-			now := time.Now()
-			go func(source string, runner subscraping.Source) {
-				for resp := range runner.Run(ctx, domain, session) {
+			go func(source subscraping.Source) {
+				for resp := range source.Run(ctx, domain, session) {
 					results <- resp
 				}
-
-				duration := time.Since(now)
-				timeTakenMutex.Lock()
-				timeTaken[source] = fmt.Sprintf("Source took %s for enumeration\n", duration)
-				timeTakenMutex.Unlock()
-
 				wg.Done()
-			}(source, runner)
+			}(runner)
 		}
 		wg.Wait()
-
-		for source, data := range timeTaken {
-			gologger.Verbose().Label(source).Msg(data)
-		}
-
-		close(results)
 		cancel()
 	}()
-
 	return results
+}
+
+func (a *Agent) GetStatistics() map[string]subscraping.Statistics {
+	stats := make(map[string]subscraping.Statistics)
+	sort.Slice(a.sources, func(i, j int) bool {
+		return a.sources[i].Name() > a.sources[j].Name()
+	})
+
+	for _, source := range a.sources {
+		stats[source.Name()] = source.Statistics()
+	}
+	return stats
 }

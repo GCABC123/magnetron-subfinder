@@ -4,7 +4,8 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
-	"github.com/projectdiscovery/fileutil"
+
+	"github.com/projectdiscovery/utils/file"
 )
 
 var (
@@ -34,16 +35,4 @@ func sanitize(data string) (string, error) {
 		return "", ErrEmptyInput
 	}
 	return data, nil
-}
-
-func multipartKey(key string) (keyPartA, keyPartB string, ok bool) {
-	parts := strings.Split(key, ":")
-	ok = len(parts) == MultipleKeyPartsLength
-
-	if ok {
-		keyPartA = parts[0]
-		keyPartB = parts[1]
-	}
-
-	return
 }
